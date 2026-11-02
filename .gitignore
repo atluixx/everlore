@@ -1,0 +1,8 @@
+.venv/
+everlore.db*
+everlore
+.env
+.env.*
+!.env.example
+*.pem
+*.key
