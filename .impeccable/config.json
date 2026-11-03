@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "arial",
+        "createdAt": "2026-11-03T01:58:08.777Z",
+        "reason": "User confirmed an old-style AO3-like archive layout; Arial intentionally provides compact, familiar interface controls while Georgia carries the literary voice"
+      }
+    ]
+  }
+}
