@@ -42,3 +42,20 @@ footer{border-top:4px double #a4b9c7;background:#eef3f5}.footer-inner{padding-to
 .chapter-navigation{display:flex;justify-content:space-between;gap:16px;border-block:1px solid var(--line);margin-top:40px;padding:12px 0}.chapter-navigation a:last-child{margin-left:auto}
 .chapter-editor{border:1px solid var(--line);padding:12px;margin:12px 0}.chapter-editor summary{cursor:pointer;font-weight:bold}.chapter-editor button{margin:4px 4px 4px 0}
 .inline-form { display: inline; }
+
+/* Keep publishing controls together and make room for the story on desktop. */
+.publish-page h1{margin-bottom:4px}
+.publish-page>p{margin-bottom:8px}
+.publish-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 20px;align-items:start;margin:12px 0}
+.publish-form>label{min-width:0;margin:0}
+.publish-form>label:has([name="content"]){grid-column:1/-1}
+.publish-form>label:has([name="content"]) textarea{min-height:150px;height:clamp(150px,22vh,260px)}
+.publish-form>label:has([name="summary"]){grid-column:span 2}
+.publish-form>label:has([name="summary"]) textarea{min-height:64px;height:64px}
+.publish-form>p{grid-column:1/-1;margin:0}
+.publish-form .warning-options{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:4px 20px;margin:0;padding:6px 12px}
+.publish-form .warning-options p{flex-basis:100%;margin:0}
+.publish-form .warning-options label{margin:0;min-height:30px}
+.publish-form .publish-actions{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}
+@media(max-width:850px){.publish-form{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.publish-form{grid-template-columns:minmax(0,1fr);gap:12px}.publish-form>label:has([name="summary"]),.publish-form>label:has([name="content"]){grid-column:auto}.publish-form .warning-options{display:block}.publish-form .warning-options label{margin:4px 0}.publish-form .publish-actions{grid-column:auto}}
