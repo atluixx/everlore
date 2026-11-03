@@ -1,0 +1,8 @@
+.git
+.venv
+.vercel
+.env
+.env.*
+everlore.db*
+*.pem
+*.key

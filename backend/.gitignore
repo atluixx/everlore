@@ -1,8 +1,9 @@
 .venv/
 everlore.db*
-everlore
+/everlore
 .env
 .env.*
 !.env.example
 *.pem
 *.key
+.vercel
