@@ -211,6 +211,16 @@ func TestMultiUserIsolation(t *testing.T) {
 		t.Fatal("unverified account logged in")
 	}
 	verification := mailedToken
+	res = get(c, "/api/account/verify?token="+verification)
+	verifyPage, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != 200 || !strings.Contains(string(verifyPage), "/static/verify.js") || strings.Contains(string(verifyPage), "<button") {
+		t.Fatal("verification page does not start automatically")
+	}
+	var verifiedBeforeClick int
+	if err := db.QueryRow("SELECT email_verified FROM users WHERE username='charlie'").Scan(&verifiedBeforeClick); err != nil || verifiedBeforeClick != 0 {
+		t.Fatal("opening the verification page consumed the token before browser execution")
+	}
 	res = post(c, "/api/account/verify", url.Values{"token": {verification}})
 	if res.StatusCode != 200 {
 		t.Fatalf("verify: %d", res.StatusCode)

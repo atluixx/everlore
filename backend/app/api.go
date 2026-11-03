@@ -121,7 +121,10 @@ func consumeToken(tx *sql.Tx, token, purpose string) (int, error) {
 }
 func accountVerify(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
-		tokenForm(w, r, false)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "same-origin")
+		fmt.Fprintf(w, `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verifying your email — Everlore</title><link rel="stylesheet" href="/static/style.css"><script src="/static/verify.js" defer></script><body><main class="wrap page narrow"><h1>Verifying your email</h1><p id="verification-status" role="status" aria-live="polite">Please wait while we verify your email.</p><noscript><p>Enable JavaScript to verify your email automatically.</p></noscript><form id="verification-form" method="post"><input type="hidden" name="csrf" value="%s"><input type="hidden" name="token" value="%s"></form><p><a href="/login">Go to log in</a> · <a href="/verification">Request a new link</a></p></main></body></html>`, html.EscapeString(csrfToken(w, r)), html.EscapeString(r.URL.Query().Get("token")))
 		return
 	}
 	if !apiPost(w, r) {
