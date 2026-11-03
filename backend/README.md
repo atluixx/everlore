@@ -9,21 +9,25 @@ Everlore is an independent, community-oriented fiction archive for fanfiction, o
 ## What works today
 
 - Public work browsing and keyword, fandom, tag, rating, and completion filters, with shareable search URLs.
-- Single-chapter work publishing, reading, and owner-only editing.
+- Story publishing and reading, private manually saved drafts, owner-only editing, and chapter management after signing in. Guests can submit one chapter after email confirmation and later claim it with a verified account using the same email.
 - Accounts, public profiles, multiple publishing pseudonyms, email verification, and password recovery.
-- Personal bookmarks, likes, and comments.
+- Personal bookmarks, likes, comments, story and author subscriptions, and in-app notifications.
 - Reading theme and text-size controls.
-- Report submission and administrator review, moderation actions, and audit log through the API.
+- Report submission, administrator review and moderation actions, and an audit log API.
 
-See [API.md](API.md) for account and moderation endpoint details. The interface is server-rendered; Go, SQLite, and a small amount of JavaScript power the application.
+See [API.md](API.md) for account and moderation endpoint details. The interface is server-rendered; Go, SQLite (or Turso/libSQL), and a small amount of JavaScript power the application.
 
 ## Run locally
 
 Requirements: Go 1.27 or newer.
 
 ```sh
-go run .
+cd backend
+cp .env.example .env
+go run ./cmd/everlore
 ```
+
+The local server loads `.env` if it exists; shell environment variables take precedence. `.env` is ignored by Git. Vercel uses its own environment variables and does not read this local file. The CLI-generated `.env.local` contains Vercel development credentials and is separate from the app configuration.
 
 Open [http://localhost:8080](http://localhost:8080). The server creates `everlore.db` in its working directory. Set `PORT` to use another port. To populate a development database with illustrative works, start the server with `EVERLORE_SEED=1`; existing seed data is not removed automatically.
 
@@ -32,13 +36,26 @@ go test ./...
 go vet ./...
 ```
 
+## Project structure
+
+- `cmd/everlore/` — local server entry point and `.env` loading.
+- `api/` — Vercel function entry point.
+- `backend/app/` — application handlers, database access, email, and tests.
+- `frontend/` — server-rendered templates, static assets, and the Go embed declaration that packages them into the binary.
+- `vercel.json` — Vercel routing configuration.
+- `.env.example` — documented local configuration template; `.env` contains local values and is not committed.
+
+The backend package still contains several responsibilities and can be split into focused packages as the archive grows.
+
 ## Email configuration
 
-Registration and password recovery require an SMTP service that supports STARTTLS. Configure these environment variables in the server environment; never commit credentials:
+Registration and password recovery can use Resend or an SMTP service that supports STARTTLS. Configure these environment variables in the server environment; never commit credentials:
 
 | Variable | Purpose |
 | --- | --- |
 | `EVERLORE_BASE_URL` | Public HTTPS origin used in verification and reset links. |
+| `RESEND_API_KEY` | Resend API key. When set, Resend is used instead of SMTP. |
+| `EVERLORE_EMAIL_FROM` | Verified sender address for Resend, for example `Everlore <archive@example.com>`. |
 | `EVERLORE_SMTP_ADDR` | SMTP host and port, for example `smtp.example.com:587`. |
 | `EVERLORE_SMTP_FROM` | Verified sender address. |
 | `EVERLORE_SMTP_USER` | SMTP username, if required. |
@@ -48,19 +65,30 @@ If delivery fails, the account remains unverified and can request another verifi
 
 ## Administration and deployment
 
-To create the first administrator, verify an account, then start the server once with `EVERLORE_BOOTSTRAP_ADMIN` set to its username. Remove the variable afterward. Reports, account and work deletion, and moderation actions are currently API-only.
+To create the first administrator, verify an account, then start the server once with `EVERLORE_BOOTSTRAP_ADMIN` set to its username. Remove the variable afterward.
 
-Set `EVERLORE_SECURE_COOKIES=1` behind an HTTPS reverse proxy and block direct HTTP access to the application. Rate limits use the connecting IP and SQLite; forwarded IP headers are not trusted, so visitors behind one proxy share its limit. SQLite is intended for a single host. Use SQLite's online backup facilities, include WAL state, and test restoration.
+Set `EVERLORE_SECURE_COOKIES=1` behind an HTTPS reverse proxy and block direct HTTP access to the application. Rate limits use the connecting IP and the database. On Vercel the application uses Vercel’s client-IP header; local servers do not trust forwarded headers. Local SQLite is intended for a single host. Use SQLite's online backup facilities, include WAL state, and test restoration.
 
-Configure HTTPS, persistent storage, mail delivery, monitoring, backups, and moderation access before accepting users. A security review and deployment validation remain necessary.
+Vercel deployments use the included Go function and require `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`; these are supplied by the connected Turso integration. Build from `backend/` with the sibling `frontend/` directory available, then deploy the build output:
+
+```sh
+cd backend
+vercel pull --yes --environment=production
+vercel build --prod
+node scripts/prepare-vercel.mjs
+vercel deploy --prebuilt --prod
+```
+
+The preparation step handles a temporary bootstrap path generated by the local Vercel Go builder. A remote build configured with `backend/` as its root must also have access to the sibling `frontend/` module; do not assume that a backend-only upload includes it. Configure HTTPS, persistent storage, mail delivery, monitoring, backups, and moderation access before accepting users. A security review and deployment validation remain necessary.
 
 ## Current limitations
 
-- Multi-chapter publishing, drafts, subscriptions, collections, series, and notifications are not implemented.
+- Drafts require manual saving; autosave and preview are not implemented. Coauthors and story visibility controls are not implemented.
+- Collections, series, reading history, export, bookmark notes and sharing, and email notifications are not implemented.
 - Search and tags are basic; canonical tags, aliases, full-text indexing, and several advanced filters are still needed.
-- Reports, deletion, and moderation need user-facing screens; email address changes and migration of legacy accounts are unfinished.
+- Email address changes and migration of legacy accounts are unfinished; moderation tools and published community policies need further development.
 - Production deployment, operational recovery, and security hardening are incomplete. Do not treat this implementation as a security audit.
 
 ## Project notes
 
-[API reference](API.md) · [Product direction](PRODUCT.md) · [Interface direction](DESIGN.md)
+[API reference](API.md) · [Product direction](../frontend/docs/PRODUCT.md) · [Interface direction](../frontend/docs/DESIGN.md)
