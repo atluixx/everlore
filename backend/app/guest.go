@@ -115,7 +115,7 @@ func guestVerify(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Referrer-Policy", "same-origin")
 		fmt.Fprintf(w, `<!doctype html><html lang="en"><meta charset="utf-8"><title>Confirm your story</title><body><main><h1>Confirm your story</h1><p>Confirm to publish your story in Everlore.</p><form method="post"><input type="hidden" name="csrf" value="%s"><input type="hidden" name="token" value="%s"><button>Publish story</button></form></main></body></html>`, html.EscapeString(csrfToken(w, r)), html.EscapeString(r.URL.Query().Get("token")))
 		return
 	}

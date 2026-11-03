@@ -63,3 +63,23 @@ func TestSecurityHeaders(t *testing.T) {
 		}
 	}
 }
+
+func TestTokenFormsPreserveSameOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		path    string
+		handler http.HandlerFunc
+	}{
+		{"/api/account/verify", accountVerify},
+		{"/api/account/reset", accountReset},
+		{"/guest/verify", guestVerify},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "https://everlore.online"+tc.path+"?token=example", nil)
+			w := httptest.NewRecorder()
+			security(tc.handler).ServeHTTP(w, r)
+			if got := w.Header().Get("Referrer-Policy"); got != "same-origin" {
+				t.Fatalf("Referrer-Policy = %q, want same-origin", got)
+			}
+		})
+	}
+}

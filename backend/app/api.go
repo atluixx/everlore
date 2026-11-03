@@ -382,7 +382,9 @@ func apiCSRF(w http.ResponseWriter, r *http.Request) {
 func tokenForm(w http.ResponseWriter, r *http.Request, reset bool) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	// Preserve the origin on same-origin form submissions while withholding the
+	// token-bearing URL from cross-origin requests.
+	w.Header().Set("Referrer-Policy", "same-origin")
 	token := html.EscapeString(r.URL.Query().Get("token"))
 	csrf := html.EscapeString(csrfToken(w, r))
 	title := "Verify email"
