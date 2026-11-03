@@ -1,14 +1,22 @@
-package main
+package everlore
 
 import (
+	"math/rand/v2"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
-// One SQLite database is shared by all processes on this host. Do not trust
-// forwarded addresses unless the application is reachable only through a trusted proxy.
+// Vercel supplies a sanitized client IP; local servers do not trust forwarded headers.
 func clientIP(r *http.Request) string {
+	if os.Getenv("VERCEL") != "" {
+		forwarded := strings.TrimSpace(r.Header.Get("X-Vercel-Forwarded-For"))
+		if ip := net.ParseIP(forwarded); ip != nil {
+			return ip.String()
+		}
+	}
 	host, _, e := net.SplitHostPort(r.RemoteAddr)
 	if e != nil {
 		host = r.RemoteAddr
@@ -23,8 +31,10 @@ func allowAuth(r *http.Request) bool {
 		return false
 	}
 	defer tx.Rollback()
-	if _, e = tx.Exec("DELETE FROM rate_limits WHERE created<?", now-600); e != nil {
-		return false
+	if rand.IntN(64) == 0 {
+		if _, e = tx.Exec("DELETE FROM rate_limits WHERE created<?", now-600); e != nil {
+			return false
+		}
 	}
 	var n int
 	if e = tx.QueryRow("SELECT count(*) FROM rate_limits WHERE key=? AND created>?", key, now-600).Scan(&n); e != nil || n >= 20 {

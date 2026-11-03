@@ -1,19 +1,14 @@
-package main
+package everlore
 
 import (
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
 	"log"
-	"net"
 	"net/http"
 	"net/mail"
-	"net/smtp"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -51,107 +46,8 @@ func apiSchema() {
 			must(e)
 		}
 	}
-	_, e := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users(email COLLATE NOCASE) WHERE email IS NOT NULL; CREATE TABLE IF NOT EXISTS account_tokens (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, purpose TEXT NOT NULL, expires INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS rate_limits (key TEXT NOT NULL, created INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS rate_limits_idx ON rate_limits(key,created); CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY, reporter_id INTEGER REFERENCES users(id) ON DELETE SET NULL, work_id INTEGER REFERENCES works(id), reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', created INTEGER NOT NULL, resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL, resolution TEXT NOT NULL DEFAULT ''); CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY, actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL, action TEXT NOT NULL, target TEXT NOT NULL, created INTEGER NOT NULL);`)
+	e := execBatch(`CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users(email COLLATE NOCASE) WHERE email IS NOT NULL; CREATE TABLE IF NOT EXISTS account_tokens (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, purpose TEXT NOT NULL, expires INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS rate_limits (key TEXT NOT NULL, created INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS rate_limits_idx ON rate_limits(key,created); CREATE INDEX IF NOT EXISTS rate_limits_created_idx ON rate_limits(created); CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY, reporter_id INTEGER REFERENCES users(id) ON DELETE SET NULL, work_id INTEGER REFERENCES works(id), reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', created INTEGER NOT NULL, resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL, resolution TEXT NOT NULL DEFAULT ''); CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY, actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL, action TEXT NOT NULL, target TEXT NOT NULL, created INTEGER NOT NULL);`)
 	must(e)
-}
-func randomToken() (string, error) {
-	b := make([]byte, 32)
-	if _, e := rand.Read(b); e != nil {
-		return "", e
-	}
-	return hex.EncodeToString(b), nil
-}
-func sendAccountMail(email, purpose, token string) error {
-	base := strings.TrimRight(os.Getenv("EVERLORE_BASE_URL"), "/")
-	addr := os.Getenv("EVERLORE_SMTP_ADDR")
-	from := os.Getenv("EVERLORE_SMTP_FROM")
-	if base == "" || addr == "" || from == "" || strings.ContainsAny(from, "\r\n") {
-		return errors.New("mail service is not configured")
-	}
-	u, e := url.Parse(base)
-	if e != nil || u.Scheme != "https" || u.Host == "" {
-		return errors.New("EVERLORE_BASE_URL must be an HTTPS URL")
-	}
-	host, _, e := net.SplitHostPort(addr)
-	if e != nil {
-		return e
-	}
-	subject := "Verify your Everlore account"
-	path := "/api/account/verify"
-	if purpose == "reset" {
-		subject = "Reset your Everlore password"
-		path = "/api/account/reset"
-	}
-	link := base + path + "?token=" + url.QueryEscape(token)
-	body := "From: " + from + "\r\nTo: " + email + "\r\nSubject: " + subject + "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + subject + ":\r\n" + link + "\r\n\r\nThis link expires automatically.\r\n"
-	// smtp.SendMail requires STARTTLS when offered; require it explicitly so credentials and tokens never travel in plaintext.
-	conn, e := net.DialTimeout("tcp", addr, 10*time.Second)
-	if e != nil {
-		return e
-	}
-	conn.SetDeadline(time.Now().Add(30 * time.Second))
-	c, e := smtp.NewClient(conn, host)
-	if e != nil {
-		return e
-	}
-	defer c.Close()
-	if ok, _ := c.Extension("STARTTLS"); !ok {
-		return errors.New("SMTP server does not support STARTTLS")
-	}
-	if e = c.StartTLS(nil); e != nil {
-		return e
-	}
-	if user := os.Getenv("EVERLORE_SMTP_USER"); user != "" {
-		if e = c.Auth(smtp.PlainAuth("", user, os.Getenv("EVERLORE_SMTP_PASSWORD"), host)); e != nil {
-			return e
-		}
-	}
-	if e = c.Mail(from); e != nil {
-		return e
-	}
-	if e = c.Rcpt(email); e != nil {
-		return e
-	}
-	wc, e := c.Data()
-	if e != nil {
-		return e
-	}
-	if _, e = wc.Write([]byte(body)); e != nil {
-		wc.Close()
-		return e
-	}
-	if e = wc.Close(); e != nil {
-		return e
-	}
-	return c.Quit()
-}
-
-var sendMail = sendAccountMail
-
-func issueToken(uid int, email, purpose string) error {
-	token, e := randomToken()
-	if e != nil {
-		return e
-	}
-	expiry := time.Now().Add(time.Hour)
-	if purpose == "verify" {
-		expiry = time.Now().Add(24 * time.Hour)
-	}
-	tx, e := db.Begin()
-	if e != nil {
-		return e
-	}
-	defer tx.Rollback()
-	if _, e = tx.Exec("DELETE FROM account_tokens WHERE user_id=? AND purpose=?", uid, purpose); e != nil {
-		return e
-	}
-	if _, e = tx.Exec("INSERT INTO account_tokens VALUES(?,?,?,?)", sessionHash(token), uid, purpose, expiry.Unix()); e != nil {
-		return e
-	}
-	if e = tx.Commit(); e != nil {
-		return e
-	}
-	return sendMail(email, purpose, token)
 }
 func accountRegister(w http.ResponseWriter, r *http.Request) {
 	if !apiPost(w, r) {
@@ -312,7 +208,7 @@ func accountDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback() // Published works and their author labels are retained as orphaned archive works.
-	for _, q := range []string{"UPDATE works SET user_id=NULL WHERE user_id=?", "DELETE FROM comments WHERE user_id=?", "DELETE FROM bookmarks WHERE user_id=?", "DELETE FROM kudos WHERE user_id=?", "DELETE FROM sessions WHERE user_id=?", "DELETE FROM account_tokens WHERE user_id=?", "DELETE FROM pseudonyms WHERE user_id=?", "UPDATE reports SET reporter_id=NULL WHERE reporter_id=?", "UPDATE reports SET resolved_by=NULL WHERE resolved_by=?", "UPDATE audit_log SET actor_id=NULL WHERE actor_id=?", "DELETE FROM users WHERE id=?"} {
+	for _, q := range []string{"UPDATE works SET user_id=NULL WHERE user_id=?", "DELETE FROM comments WHERE user_id=?", "DELETE FROM bookmarks WHERE user_id=?", "DELETE FROM kudos WHERE user_id=?", "DELETE FROM subscriptions WHERE user_id=?", "DELETE FROM subscriptions WHERE kind='author' AND target_id=?", "DELETE FROM notifications WHERE user_id=?", "DELETE FROM drafts WHERE user_id=?", "DELETE FROM sessions WHERE user_id=?", "DELETE FROM account_tokens WHERE user_id=?", "DELETE FROM pseudonyms WHERE user_id=?", "UPDATE reports SET reporter_id=NULL WHERE reporter_id=?", "UPDATE reports SET resolved_by=NULL WHERE resolved_by=?", "UPDATE audit_log SET actor_id=NULL WHERE actor_id=?", "DELETE FROM users WHERE id=?"} {
 		if _, e = tx.Exec(q, uid); e != nil {
 			apiError(w, 500, "Could not delete account")
 			return
@@ -323,7 +219,7 @@ func accountDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: "session", Path: "/", MaxAge: -1})
-	apiReply(w, 200, map[string]string{"message": "Account deleted; published works were orphaned."})
+	apiReply(w, 200, map[string]string{"message": "Account deleted; published stories were orphaned."})
 }
 func apiPseudonyms(w http.ResponseWriter, r *http.Request) {
 	uid := apiUser(w, r)
@@ -384,7 +280,7 @@ func reportWork(w http.ResponseWriter, r *http.Request) {
 	id, e := strconv.Atoi(r.FormValue("work_id"))
 	reason := strings.TrimSpace(r.FormValue("reason"))
 	if e != nil || len(reason) < 10 || len(reason) > 3000 {
-		apiError(w, 400, "Work and reason (10–3000 characters) are required")
+		apiError(w, 400, "Story and reason (10–3000 characters) are required")
 		return
 	}
 	res, e := db.Exec("INSERT INTO reports(reporter_id,work_id,reason,created) SELECT ?,id,?,? FROM works WHERE id=? AND published=1", uid, reason, time.Now().Unix(), id)
@@ -394,7 +290,7 @@ func reportWork(w http.ResponseWriter, r *http.Request) {
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		apiError(w, 404, "Work not found")
+		apiError(w, 404, "Story not found")
 		return
 	}
 	apiReply(w, 201, map[string]string{"message": "Report submitted"})
@@ -519,7 +415,7 @@ func adminAction(w http.ResponseWriter, r *http.Request) {
 	case "hide_work":
 		res, e = tx.Exec("UPDATE works SET published=0 WHERE id=? AND published=1", target)
 	case "restore_work":
-		res, e = tx.Exec("UPDATE works SET published=1 WHERE id=? AND published=0", target)
+		res, e = tx.Exec("UPDATE works SET published=1 WHERE id=? AND published=0 AND NOT EXISTS (SELECT 1 FROM guest_claims WHERE work_id=? AND verified=0)", target, target)
 	case "suspend_user":
 		if target == uid {
 			apiError(w, 400, "Cannot suspend your own account")
@@ -562,32 +458,32 @@ func deleteWork(w http.ResponseWriter, r *http.Request) {
 	}
 	id, e := strconv.Atoi(r.FormValue("id"))
 	if e != nil || id < 1 {
-		apiError(w, 400, "Invalid work ID")
+		apiError(w, 400, "Invalid story ID")
 		return
 	}
 	tx, e := db.Begin()
 	if e != nil {
-		apiError(w, 500, "Could not delete work")
+		apiError(w, 500, "Could not delete story")
 		return
 	}
 	defer tx.Rollback()
 	var exists int
 	e = tx.QueryRow("SELECT 1 FROM works WHERE id=? AND user_id=?", id, uid).Scan(&exists)
 	if e != nil {
-		apiError(w, 404, "Work not found")
+		apiError(w, 404, "Story not found")
 		return
 	}
-	for _, q := range []string{"UPDATE reports SET work_id=NULL WHERE work_id=?", "DELETE FROM comments WHERE work_id=?", "DELETE FROM bookmarks WHERE work_id=?", "DELETE FROM kudos WHERE work_id=?", "DELETE FROM works WHERE id=?"} {
+	for _, q := range []string{"UPDATE reports SET work_id=NULL WHERE work_id=?", "DELETE FROM comments WHERE work_id=?", "DELETE FROM bookmarks WHERE work_id=?", "DELETE FROM kudos WHERE work_id=?", "DELETE FROM chapters WHERE work_id=?", "DELETE FROM guest_claims WHERE work_id=?", "DELETE FROM subscriptions WHERE kind='story' AND target_id=?", "DELETE FROM notifications WHERE work_id=?", "DELETE FROM works WHERE id=?"} {
 		if _, e = tx.Exec(q, id); e != nil {
-			apiError(w, 500, "Could not delete work")
+			apiError(w, 500, "Could not delete story")
 			return
 		}
 	}
 	if e = tx.Commit(); e != nil {
-		apiError(w, 500, "Could not delete work")
+		apiError(w, 500, "Could not delete story")
 		return
 	}
-	apiReply(w, 200, map[string]string{"message": "Work deleted"})
+	apiReply(w, 200, map[string]string{"message": "Story deleted"})
 }
 
 func nullableInt(n sql.NullInt64) any {

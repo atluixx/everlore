@@ -1,4 +1,4 @@
-package main
+package everlore
 
 import (
 	"crypto/rand"
@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -30,7 +29,7 @@ func migrate() {
 			must(err)
 		}
 	}
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS pseudonyms (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL COLLATE NOCASE UNIQUE); CREATE INDEX IF NOT EXISTS works_owner_idx ON works(user_id); CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires); CREATE UNIQUE INDEX IF NOT EXISTS users_name_nocase ON users(username COLLATE NOCASE); DELETE FROM sessions WHERE expires < strftime('%s','now');`)
+	err := execBatch(`CREATE TABLE IF NOT EXISTS pseudonyms (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL COLLATE NOCASE UNIQUE); CREATE INDEX IF NOT EXISTS works_owner_idx ON works(user_id); CREATE INDEX IF NOT EXISTS works_recent_published_idx ON works(updated DESC, id DESC) WHERE published=1; CREATE INDEX IF NOT EXISTS kudos_work_idx ON kudos(work_id); CREATE INDEX IF NOT EXISTS comments_work_idx ON comments(work_id, id); CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires); CREATE UNIQUE INDEX IF NOT EXISTS users_name_nocase ON users(username COLLATE NOCASE); DELETE FROM sessions WHERE expires < strftime('%s','now');`)
 	must(err)
 }
 func csrfToken(w http.ResponseWriter, r *http.Request) string {
@@ -174,7 +173,8 @@ func publicProfile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	render(w, r, "publicprofile", Page{Title: username, ProfileName: username, DisplayName: display, Bio: bio, Works: queryWorks(" AND user_id=? ORDER BY updated DESC", uid)})
+	viewer, _ := current(r)
+	render(w, r, "publicprofile", Page{Title: username, ProfileName: username, DisplayName: display, Bio: bio, Works: queryWorks(" AND user_id=? ORDER BY updated DESC", uid), ProfileID: uid, Subscribed: subscribed(viewer, "author", uid), CanSubscribe: viewer != 0 && viewer != uid})
 }
 func editWork(w http.ResponseWriter, r *http.Request) {
 	uid, _ := current(r)
@@ -187,27 +187,31 @@ func editWork(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	works := queryWorks(" AND id=? AND user_id=?", id, uid)
+	works := queryWorksWithContent(" AND id=? AND user_id=?", id, uid)
 	if len(works) == 0 {
 		http.NotFound(w, r)
 		return
 	}
-	p := Page{Title: "Edit work", Work: works[0], Editing: true}
+	p := Page{Title: "Edit story", Work: works[0]}
 	if r.Method == "POST" {
 		title := strings.TrimSpace(r.FormValue("title"))
 		content := strings.TrimSpace(r.FormValue("content"))
-		fandom := strings.TrimSpace(r.FormValue("fandom"))
+		fandom := storedFandom(strings.TrimSpace(r.FormValue("fandom")))
 		p.Work.Title, p.Work.Content, p.Work.Fandom = title, content, fandom
 		p.Work.Summary, p.Work.Tags = r.FormValue("summary"), r.FormValue("tags")
-		if title == "" || content == "" || fandom == "" {
-			p.Error = "Title, fandom and work text are required."
+		notices := r.Form["warnings"]
+		if len(notices) > 0 {
+			p.Work.Warnings = strings.Join(notices, ", ")
+		}
+		if title == "" || content == "" || fandom == "" || (len(notices) > 0 && !validWarnings(notices)) {
+			p.Error = "Title, fandom and story text are required. Choose valid notices, with None apply on its own."
 		} else {
-			_, e := db.Exec(`UPDATE works SET title=?,fandom=?,summary=?,tags=?,content=?,words=?,updated=? WHERE id=? AND user_id=?`, title, fandom, r.FormValue("summary"), r.FormValue("tags"), content, len(strings.Fields(content)), time.Now().Format("2006-01-02"), id, uid)
+			e := updateWorkWithChapterWords(uid, id, title, fandom, r.FormValue("summary"), r.FormValue("tags"), content, p.Work.Warnings)
 			if e == nil {
 				http.Redirect(w, r, fmt.Sprintf("/work/%d", id), 303)
 				return
 			}
-			p.Error = "Could not save your work."
+			p.Error = "Could not save your story."
 		}
 	}
 	render(w, r, "edit", p)

@@ -11,6 +11,8 @@ document.querySelectorAll('[data-api-form]').forEach((form) => {
       const data = await response.json();
       feedback.textContent = data.message || data.error || 'Something went wrong. Please try again.';
       feedback.classList.add(response.ok ? 'message' : 'error');
+      if (response.ok && form.dataset.redirectOnSuccess) { window.location.assign(form.dataset.redirectOnSuccess); return; }
+      if (response.ok && form.hasAttribute('data-reload-on-success')) { window.location.reload(); return; }
       if (response.ok) form.querySelectorAll('input:not([type="hidden"])').forEach((input) => { input.value = ''; });
     } catch (_) {
       feedback.textContent = 'Could not reach the archive. Check your connection and try again.';
@@ -30,5 +32,19 @@ document.querySelectorAll('[data-reading-toggle]').forEach((button) => {
     const active = target.classList.toggle(kind);
     button.setAttribute('aria-pressed', String(active));
     try { localStorage.setItem(key, String(active)); } catch (_) { /* Keep the current page usable. */ }
+  });
+});
+// Coalesce rapid repeated searches without delaying any other action.
+document.querySelectorAll('[data-search-form]').forEach((form) => {
+  let pending;
+  let submitting = false;
+  form.addEventListener('submit', (event) => {
+    if (submitting) return;
+    event.preventDefault();
+    clearTimeout(pending);
+    pending = setTimeout(() => {
+      submitting = true;
+      form.requestSubmit();
+    }, 300);
   });
 });

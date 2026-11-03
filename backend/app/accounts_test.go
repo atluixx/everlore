@@ -1,4 +1,4 @@
-package main
+package everlore
 
 import (
 	"database/sql"
@@ -27,14 +27,27 @@ func TestMultiUserIsolation(t *testing.T) {
 	}
 	migrate()
 	apiSchema()
+	if err := migrateDrafts(); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateCommunity(); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateGuestChapters(); err != nil {
+		t.Fatal(err)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/register", register)
 	mux.HandleFunc("/login", login)
 	mux.HandleFunc("/publish", publish)
+	mux.HandleFunc("/drafts/", drafts)
 	mux.HandleFunc("/edit/", editWork)
 	mux.HandleFunc("/work/", work)
 	mux.HandleFunc("/dashboard", dashboard)
 	mux.HandleFunc("/profile", profile)
+	mux.HandleFunc("/moderation", moderationPage)
+	mux.HandleFunc("/report/", reportPage)
+	mux.HandleFunc("/api/admin/reports", adminReports)
 	mux.HandleFunc("/api/csrf", apiCSRF)
 	mux.HandleFunc("/api/account/register", accountRegister)
 	mux.HandleFunc("/api/account/verify", accountVerify)
@@ -88,9 +101,52 @@ func TestMultiUserIsolation(t *testing.T) {
 			t.Fatalf("login %s: %d", v.name, res.StatusCode)
 		}
 	}
+	res := post(a, "/drafts/save", url.Values{"title": {"Private draft"}, "content": {"unfinished text"}})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("save draft: %d", res.StatusCode)
+	}
+	location := res.Header.Get("Location")
+	res = get(b, location)
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("another user accessed a draft: %d", res.StatusCode)
+	}
+	res = get(a, location)
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(body), "unfinished text") {
+		t.Fatal("saved draft was not restored")
+	}
+	res = post(a, "/drafts/save", url.Values{"draft_id": {"1"}, "draft_revision": {"1"}, "content": {"newer text"}})
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("update draft: %d", res.StatusCode)
+	}
+	res = post(a, "/drafts/save", url.Values{"draft_id": {"1"}, "draft_revision": {"1"}, "content": {"stale text"}})
+	if res.StatusCode != http.StatusConflict {
+		t.Fatalf("stale draft update: %d", res.StatusCode)
+	}
+	res = post(b, "/drafts/delete", url.Values{"draft_id": {"1"}, "draft_revision": {"2"}})
+	if res.StatusCode != http.StatusConflict {
+		t.Fatalf("another user deleted a draft: %d", res.StatusCode)
+	}
+	stale := url.Values{"draft_id": {"1"}, "draft_revision": {"1"}, "title": {"Published draft"}, "fandom": {"Original Work"}, "rating": {"General Audiences"}, "warnings": {"None apply"}, "content": {"Story text"}, "status": {"Complete"}}
+	res = post(a, "/publish", stale)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("stale draft publish: %d", res.StatusCode)
+	}
+	var draftCount, storyCount int
+	if err := db.QueryRow("SELECT count(*) FROM drafts WHERE id=1").Scan(&draftCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT count(*) FROM works").Scan(&storyCount); err != nil {
+		t.Fatal(err)
+	}
+	if draftCount != 1 || storyCount != 0 {
+		t.Fatal("stale draft was deleted or published")
+	}
 	// Invalid metadata must not discard an author's draft text.
 	csrfURL, _ := url.Parse(server.URL)
-	form := url.Values{"title": {"A title"}, "fandom": {"Original Work"}, "rating": {"invalid"}, "warnings": {"No Archive Warnings Apply"}, "content": {"A draft worth keeping"}, "status": {"Complete"}}
+	form := url.Values{"title": {"A title"}, "fandom": {"Original Work"}, "rating": {"invalid"}, "warnings": {"None apply"}, "content": {"A draft worth keeping"}, "status": {"Complete"}}
 	for _, cookie := range a.Jar.Cookies(csrfURL) {
 		if cookie.Name == "csrf" {
 			form.Set("csrf", cookie.Value)
@@ -105,7 +161,7 @@ func TestMultiUserIsolation(t *testing.T) {
 	if !strings.Contains(string(invalidBody), "A draft worth keeping") || !strings.Contains(string(invalidBody), "A title") {
 		t.Fatal("validation lost entered work")
 	}
-	res := post(a, "/publish", url.Values{"title": {"Alice's story"}, "fandom": {"Original Work"}, "rating": {"General Audiences"}, "warnings": {"No Archive Warnings Apply"}, "content": {"Once upon a time"}, "status": {"Complete"}})
+	res = post(a, "/publish", url.Values{"title": {"Alice's story"}, "fandom": {"Original Work"}, "rating": {"General Audiences"}, "warnings": {"None apply"}, "content": {"Once upon a time"}, "status": {"Complete"}})
 	if res.StatusCode != 303 {
 		t.Fatalf("publish: %d", res.StatusCode)
 	}
@@ -123,7 +179,7 @@ func TestMultiUserIsolation(t *testing.T) {
 		t.Fatal(res.StatusCode)
 	}
 	res = get(b, "/dashboard")
-	body, _ := io.ReadAll(res.Body)
+	body, _ = io.ReadAll(res.Body)
 	res.Body.Close()
 	if !strings.Contains(string(body), "Alice&#39;s story") {
 		t.Fatal("bookmark missing from owner's dashboard")
@@ -184,12 +240,27 @@ func TestMultiUserIsolation(t *testing.T) {
 	if res.StatusCode != 201 {
 		t.Fatal("report creation failed")
 	}
+	res = get(b, "/moderation")
+	res.Body.Close()
+	if res.StatusCode != 403 {
+		t.Fatal("non-admin accessed moderation page")
+	}
 	res = post(b, "/api/admin/actions", url.Values{"id": {"1"}, "action": {"hide_work"}, "reason": {"Policy review"}})
 	if res.StatusCode != 403 {
 		t.Fatal("non-admin moderation accepted")
 	}
 	if _, err = db.Exec("UPDATE users SET role='admin' WHERE username='alice'"); err != nil {
 		t.Fatal(err)
+	}
+	res = get(a, "/moderation")
+	modBody, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != 200 || !strings.Contains(string(modBody), "Please review this work") {
+		t.Fatal("admin report missing")
+	}
+	res = post(a, "/api/admin/reports", url.Values{"id": {"1"}, "resolution": {"Reviewed"}})
+	if res.StatusCode != 200 {
+		t.Fatal("report resolution failed")
 	}
 	res = post(a, "/api/admin/actions", url.Values{"id": {"1"}, "action": {"hide_work"}, "reason": {"Policy review"}})
 	if res.StatusCode != 200 {
