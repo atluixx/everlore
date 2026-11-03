@@ -287,6 +287,9 @@ func render(w http.ResponseWriter, r *http.Request, name string, p Page) {
 	_, p.User = current(r)
 	p.CSRF = csrfToken(w, r)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Every rendered page contains a per-browser CSRF token. It must never be
+	// stored in a shared cache, even when the page's story data is public.
+	w.Header().Set("Cache-Control", "no-store")
 	if err := templates.ExecuteTemplate(w, name, p); err != nil {
 		log.Print(err)
 	}
@@ -493,7 +496,10 @@ func auth(w http.ResponseWriter, r *http.Request, registering bool) {
 				p.Error = "Incorrect username or password."
 			} else {
 				b := make([]byte, 32)
-				rand.Read(b)
+				if _, err := rand.Read(b); err != nil {
+					http.Error(w, "Could not start session", 500)
+					return
+				}
 				token := hex.EncodeToString(b)
 				if _, err := db.Exec("INSERT INTO sessions VALUES(?,?,?)", sessionHash(token), id, time.Now().Add(30*24*time.Hour).Unix()); err != nil {
 					http.Error(w, "Could not start session", 500)
@@ -517,7 +523,7 @@ func logout(w http.ResponseWriter, r *http.Request) {
 		if c, e := r.Cookie("session"); e == nil {
 			db.Exec("DELETE FROM sessions WHERE token=?", sessionHash(c.Value))
 		}
-		http.SetCookie(w, &http.Cookie{Name: "session", Path: "/", MaxAge: -1})
+		clearSessionCookie(w, r)
 	}
 	http.Redirect(w, r, "/", 303)
 }

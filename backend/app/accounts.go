@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -49,10 +50,22 @@ func security(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "same-origin")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+		if secureCookie(r) {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+		if _, err := r.Cookie("session"); err == nil || strings.HasPrefix(r.URL.Path, "/api/account/") || strings.HasPrefix(r.URL.Path, "/guest/verify") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		if r.Method == http.MethodPost {
 			r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
 			if err := r.ParseForm(); err != nil {
 				http.Error(w, "Invalid request", 400)
+				return
+			}
+			if !sameOrigin(r) {
+				http.Error(w, "Cross-origin request rejected", http.StatusForbidden)
 				return
 			}
 			c, e := r.Cookie("csrf")
@@ -67,6 +80,18 @@ func security(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// sameOrigin supplements the double-submit token. Browsers attach Origin to
+// unsafe cross-site requests, preventing a sibling subdomain from pairing a
+// forged CSRF cookie with a forged form token.
+func sameOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	return err == nil && u.Host != "" && strings.EqualFold(u.Host, r.Host) && (u.Scheme == "https" || u.Scheme == "http")
 }
 func pseudonyms(uid int) []Pseudonym {
 	rows, e := db.Query("SELECT id,name FROM pseudonyms WHERE user_id=? ORDER BY name", uid)
@@ -149,7 +174,7 @@ func profile(w http.ResponseWriter, r *http.Request) {
 					if e != nil {
 						p.Error = "Could not change password."
 					} else {
-						http.SetCookie(w, &http.Cookie{Name: "session", Path: "/", MaxAge: -1})
+						clearSessionCookie(w, r)
 						http.Redirect(w, r, "/login", 303)
 						return
 					}

@@ -160,6 +160,13 @@ func accountReset(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 400, "Password must be 8–72 bytes")
 		return
 	}
+	// Reject bogus tokens before running bcrypt. Otherwise an unauthenticated
+	// caller can turn every cheap request into expensive password hashing.
+	var tokenUser int
+	if len(r.FormValue("token")) != 64 || db.QueryRow("SELECT user_id FROM account_tokens WHERE token_hash=? AND purpose='reset' AND expires>?", sessionHash(r.FormValue("token")), time.Now().Unix()).Scan(&tokenUser) != nil {
+		apiError(w, 400, "Invalid or expired token")
+		return
+	}
 	hash, e := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
 	if e != nil {
 		apiError(w, 500, "Could not reset password")
@@ -218,7 +225,7 @@ func accountDelete(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 500, "Could not delete account")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "session", Path: "/", MaxAge: -1})
+	clearSessionCookie(w, r)
 	apiReply(w, 200, map[string]string{"message": "Account deleted; published stories were orphaned."})
 }
 func apiPseudonyms(w http.ResponseWriter, r *http.Request) {
@@ -360,6 +367,9 @@ func adminReports(w http.ResponseWriter, r *http.Request) {
 }
 func secureCookie(r *http.Request) bool {
 	return r.TLS != nil || os.Getenv("EVERLORE_SECURE_COOKIES") == "1"
+}
+func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: "session", Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secureCookie(r), MaxAge: -1, Expires: time.Unix(1, 0)})
 }
 func apiCSRF(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {

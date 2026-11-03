@@ -20,6 +20,12 @@ document.querySelectorAll('[data-api-form]').forEach((form) => {
     } finally { button.disabled = false; }
   });
 });
+document.querySelectorAll('[data-confirm]').forEach((element) => {
+  const eventName = element.matches('form') ? 'submit' : 'click';
+  element.addEventListener(eventName, (event) => {
+    if (!window.confirm(element.dataset.confirm)) event.preventDefault();
+  }, true);
+});
 document.querySelectorAll('[data-reading-toggle]').forEach((button) => {
   const kind = button.dataset.readingToggle;
   const target = kind === 'night' ? document.body : document.querySelector('.story');
