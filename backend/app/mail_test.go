@@ -17,17 +17,18 @@ func TestSendResendMail(t *testing.T) {
 			To      []string `json:"to"`
 			Subject string   `json:"subject"`
 			Text    string   `json:"text"`
+			HTML    string   `json:"html"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body.From != "sender@example.com" || len(body.To) != 1 || body.To[0] != "reader@example.com" || body.Text != "body" {
+		if body.From != "sender@example.com" || len(body.To) != 1 || body.To[0] != "reader@example.com" || body.Text != "body" || body.HTML != "<p>body</p>" {
 			t.Error("invalid email payload")
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
-	if err := sendResendMail(server.Client(), server.URL, "test-key", "sender@example.com", "reader@example.com", "subject", "body"); err != nil {
+	if err := sendResendMail(server.Client(), server.URL, "test-key", "sender@example.com", "reader@example.com", "subject", "body", "<p>body</p>"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -36,7 +37,7 @@ func TestSendResendMailRejectsFailure(t *testing.T) {
 		http.Error(w, "sensitive provider detail", http.StatusUnauthorized)
 	}))
 	defer server.Close()
-	err := sendResendMail(server.Client(), server.URL, "test-key", "sender@example.com", "reader@example.com", "subject", "body")
+	err := sendResendMail(server.Client(), server.URL, "test-key", "sender@example.com", "reader@example.com", "subject", "body", "<p>body</p>")
 	if err == nil || err.Error() != "email provider rejected request (HTTP 401)" {
 		t.Fatalf("unexpected error: %v", err)
 	}
